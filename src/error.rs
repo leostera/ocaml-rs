@@ -1,4 +1,4 @@
-use crate::{FromValue, ToValue, Value};
+use crate::Value;
 
 /// Errors that are translated directly into OCaml exceptions
 #[derive(Debug)]

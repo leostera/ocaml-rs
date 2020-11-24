@@ -78,10 +78,10 @@ pub trait Custom {
     }
 }
 
-unsafe impl<T: 'static + Custom> ToValue for T {
-    fn to_value(self) -> Value {
+unsafe impl<T: 'static + Custom> ToOCaml for T {
+    fn to_ocaml(self, rt: OCamlRuntime) -> Value {
         let val: crate::Pointer<T> = Pointer::alloc_custom(self);
-        val.to_value()
+        val.to_value(rt)
     }
 }
 

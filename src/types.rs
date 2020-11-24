@@ -1,6 +1,6 @@
 //! OCaml types represented in Rust, these are zero-copy and incur no additional overhead
 
-use crate::{sys, CamlError, Error};
+use crate::*;
 
 use core::{
     iter::{IntoIterator, Iterator},
@@ -8,7 +8,7 @@ use core::{
     mem, slice,
 };
 
-use crate::value::{FromValue, Size, ToValue, Value};
+use crate::value::{Size, Value};
 
 /// A handle to a Rust value/reference owned by the OCaml heap.
 ///
@@ -18,15 +18,15 @@ use crate::value::{FromValue, Size, ToValue, Value};
 #[repr(transparent)]
 pub struct Pointer<T>(pub Value, PhantomData<T>);
 
-unsafe impl<T> ToValue for Pointer<T> {
-    fn to_value(self) -> Value {
-        self.0
+impl<T> ToOCaml for Pointer<T> {
+    fn to_ocaml(self, alloc: OCamlAllocToken) -> OCamlAllocResult<Pointer<T>> {
+        OCamlAllocResult::of(self.0)
     }
 }
 
-unsafe impl<T> FromValue for Pointer<T> {
-    fn from_value(value: Value) -> Self {
-        Pointer(value, PhantomData)
+impl<T> FromOCaml for Pointer<T> {
+    fn from_ocaml(value: OCaml<Pointer<T>>) -> Self {
+        unsafe { Pointer(value.raw(), PhantomData) }
     }
 }
 
@@ -51,11 +51,11 @@ impl<T> Pointer<T> {
     }
 
     /// Allocate a `Custom` value
-    pub fn alloc_custom(x: T) -> Pointer<T>
+    pub fn alloc_custom(rt: OCamlRuntime, x: T) -> Pointer<T>
     where
         T: crate::Custom,
     {
-        let mut ptr = Pointer::from_value(Value::alloc_custom::<T>());
+        let mut ptr = Pointer::from_value(Value::alloc_custom::<T>(rt));
         ptr.set(x);
         ptr
     }
@@ -102,17 +102,17 @@ impl<T> AsMut<T> for Pointer<T> {
 /// `Array<A>` wraps an OCaml `'a array` without converting it to Rust
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct Array<T: ToValue + FromValue>(Value, PhantomData<T>);
+pub struct Array<T: ToOCaml + ToRust>(Value, PhantomData<T>);
 
-unsafe impl<T: ToValue + FromValue> ToValue for Array<T> {
-    fn to_value(self) -> Value {
-        self.0
+unsafe impl<T: ToOCaml + ToRust> ToOCaml for Array<T> {
+    fn to_ocaml(self, token: OCamlAllocToken) -> OCamlAllocResult {
+        OCamlAllocResult::of(self.0)
     }
 }
 
-unsafe impl<T: ToValue + FromValue> FromValue for Array<T> {
-    fn from_value(value: Value) -> Self {
-        Array(value, PhantomData)
+unsafe impl<T: ToOCaml + ToRust> FromOCaml for Array<T> {
+    fn from_ocaml(value: OCaml<Array<T>>) -> Self {
+        unsafe { Array(value.raw(), PhantomData) }
     }
 }
 
@@ -167,13 +167,11 @@ impl<'a> Array<f64> {
     }
 }
 
-impl<T: ToValue + FromValue> Array<T> {
+impl<T: ToOCaml + ToRust> Array<T> {
     /// Allocate a new Array
-    pub fn alloc(n: usize) -> Array<T> {
-        let x = crate::frame!((x) {
-            x = unsafe { Value(sys::caml_alloc(n, 0)) };
-            x
-        });
+    pub fn alloc(rt: OCamlRuntime, n: usize) -> Array<T> {
+        let x = unsafe { Value(sys::caml_alloc(n, 0)) };
+        let x = ocaml_alloc!(x.to_ocaml(rt));
         Array(x, PhantomData)
     }
 
@@ -232,18 +230,18 @@ impl<T: ToValue + FromValue> Array<T> {
 
     /// Array as slice
     pub fn as_slice(&self) -> &[Value] {
-        FromValue::from_value(self.0)
+        Value::slice(*self)
     }
 
     /// Array as mutable slice
     pub fn as_mut_slice(&mut self) -> &mut [Value] {
-        FromValue::from_value(self.0)
+        Value::mut_slice(self.0)
     }
 
     /// Array as `Vec`
     #[cfg(not(feature = "no-std"))]
     pub fn to_vec(&self) -> Vec<T> {
-        FromValue::from_value(self.0)
+        self.as_slice().map(|x| x.to_rust()).collect()
     }
 }
 
@@ -251,21 +249,21 @@ impl<T: ToValue + FromValue> Array<T> {
 /// additional overhead compared to a `Value` type
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct List<T: ToValue + FromValue>(Value, PhantomData<T>);
+pub struct List<T: ToOCaml + ToRust>(Value, PhantomData<T>);
 
-unsafe impl<T: ToValue + FromValue> ToValue for List<T> {
-    fn to_value(self) -> Value {
-        self.0
+unsafe impl<T: ToOCaml + ToRust> ToOCaml for List<T> {
+    fn to_ocaml(self, token: OCamlAllocToken) -> OCamlAllocResult<List<T>> {
+        OCamlAllocResult::of(self.0)
     }
 }
 
-unsafe impl<T: ToValue + FromValue> FromValue for List<T> {
-    fn from_value(value: Value) -> Self {
-        List(value, PhantomData)
+unsafe impl<T: ToOCaml + ToRust> FromOCaml for List<T> {
+    fn from_ocaml(value: OCaml<List<T>>) -> Self {
+        unsafe { List(value.raw(), PhantomData) }
     }
 }
 
-impl<T: ToValue + FromValue> List<T> {
+impl<T: ToOCaml + FromOCaml> List<T> {
     /// An empty list
     #[inline(always)]
     pub fn empty() -> List<T> {
@@ -291,16 +289,13 @@ impl<T: ToValue + FromValue> List<T> {
     /// Add an element to the front of the list returning the new list
     #[must_use]
     #[allow(clippy::should_implement_trait)]
-    pub fn add(self, v: T) -> List<T> {
-        frame!((x, tmp) {
-                x = v.to_value();
-            unsafe {
-                tmp = Value(sys::caml_alloc(2, 0));
-                tmp.store_field(0, x);
-                tmp.store_field(1, self.0);
-            }
-            List(tmp, PhantomData)
-        })
+    pub fn add(self, rt: OCamlRuntime, v: T) -> List<T> {
+        let tmp = unsafe {
+            let mut tmp = Value(sys::caml_alloc(2, 0));
+            tmp.store_field(0, v.to_ocaml(rt));
+            tmp.store_field(1, self.0);
+        };
+        List(tmp, PhantomData)
     }
 
     /// List head
@@ -327,11 +322,11 @@ impl<T: ToValue + FromValue> List<T> {
         self.iter().collect()
     }
 
-    #[cfg(not(feature = "no-std"))]
+    /*#[cfg(not(feature = "no-std"))]
     /// List as `LinkedList`
     pub fn to_linked_list(&self) -> std::collections::LinkedList<T> {
         FromValue::from_value(self.0)
-    }
+    }*/
 
     /// List iterator
     pub fn iter(&self) -> ListIterator<T> {
@@ -342,7 +337,7 @@ impl<T: ToValue + FromValue> List<T> {
     }
 }
 
-impl<T: ToValue + FromValue> IntoIterator for List<T> {
+impl<T: ToOCaml + FromOCaml> IntoIterator for List<T> {
     type Item = T;
     type IntoIter = ListIterator<T>;
 
@@ -352,12 +347,12 @@ impl<T: ToValue + FromValue> IntoIterator for List<T> {
 }
 
 /// List iterator.
-pub struct ListIterator<T: ToValue + FromValue> {
+pub struct ListIterator<T: ToOCaml + FromOCaml> {
     inner: Value,
     _marker: PhantomData<T>,
 }
 
-impl<T: ToValue + FromValue> Iterator for ListIterator<T> {
+impl<T: ToOCaml + FromOCaml> Iterator for ListIterator<T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -371,6 +366,7 @@ impl<T: ToValue + FromValue> Iterator for ListIterator<T> {
     }
 }
 
+/*
 /// `bigarray` contains wrappers for OCaml `Bigarray` values. These types can be used to transfer arrays of numbers between Rust
 /// and OCaml directly without the allocation overhead of an `array` or `list`
 pub mod bigarray {
@@ -700,4 +696,4 @@ pub(crate) mod bigarray_ext {
             array
         }
     }
-}
+}*/

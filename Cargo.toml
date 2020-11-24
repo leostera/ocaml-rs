@@ -16,6 +16,7 @@ features = [ "without-ocamlopt", "derive", "link" ]
 [dependencies]
 ocaml-sys = {path = "./sys", version = "0.19.0"}
 ocaml-derive = {path = "./derive", optional = true, version = "0.19"}
+ocaml-interop = {git = "https://github.com/simplestaking/ocaml-interop"}
 cstr_core = {version = "0.2", optional = true}
 ndarray = {version = "^0.13.1", optional = true}
 
