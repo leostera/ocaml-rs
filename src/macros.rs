@@ -41,19 +41,29 @@ pub fn init_panic_handler() {
 /// ```
 #[macro_export]
 macro_rules! body {
-    ($code:block) => {{
+    ($rt:ident, $code:block) => {{
         // Ensure panic handler is initialized
         $crate::init_panic_handler();
 
         // Initialize OCaml frame
         #[allow(unused_unsafe)]
-        let rt = OCamlRuntime::init();
+        let mut $rt = $crate::OCamlRuntime::init();
 
         // Execute Rust function
         #[allow(unused_mut)]
-        let mut res = |rt: &mut OCamlRuntime| $code;
-        let res = res(&mut rt);
+        let mut res = |$rt: &mut $crate::OCamlRuntime| $code;
+        let res = res(&mut $rt);
 
-        res
+        let tmp = &mut $rt;
+        let res = $crate::ocaml_alloc!(res.to_ocaml(tmp));
+        let res: Result<_, OCaml<$crate::Error>> = res.to_result();
+        match res {
+            Ok(x) => x.into(),
+            Err(e) => {
+                panic!("XXX")
+                //let e: Error = e.into();
+                //e.to_ocaml(tmp)
+            }
+        }
     }};
 }

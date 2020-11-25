@@ -102,13 +102,13 @@ impl<T> AsMut<T> for Pointer<T> {
 #[repr(transparent)]
 pub struct Array<T>(Value, PhantomData<T>);
 
-unsafe impl<T: ToOCaml<T> + FromOCaml<T>> ToOCaml<Array<T>> for Array<T> {
+unsafe impl<T> ToOCaml<Array<T>> for Array<T> {
     fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Array<T>> {
         AllocResult::of((self.0).0)
     }
 }
 
-unsafe impl<T: ToOCaml<T> + FromOCaml<T>> FromOCaml<Array<T>> for Array<T> {
+unsafe impl<T> FromOCaml<Array<T>> for Array<T> {
     fn from_ocaml(value: &OCaml<Array<T>>) -> Self {
         unsafe { Array(Value(value.raw()), PhantomData) }
     }
@@ -172,29 +172,35 @@ impl<T> Array<T> {
 
     /// Check if Array contains only doubles, if so `get_double` and `set_double` should be used
     /// to access values
-    pub fn is_double_array(&self) -> bool {
-        unsafe { sys::caml_is_double_array((self.0).0) == 1 }
+    pub unsafe fn is_double_array(&self) -> bool {
+        {
+            sys::caml_is_double_array((self.0).0) == 1
+        }
     }
 
     /// Array length
-    pub fn len(&self) -> usize {
-        unsafe { sys::caml_array_length((self.0).0) }
+    pub unsafe fn len(&self) -> usize {
+        {
+            sys::caml_array_length((self.0).0)
+        }
     }
 
     /// Returns true when the array is empty
-    pub fn is_empty(&self) -> bool {
+    pub unsafe fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Set array index
-    pub fn set(&mut self, rt: &mut Runtime, i: usize, v: T) -> Result<(), Error>
+    pub unsafe fn set(&mut self, rt: &mut Runtime, i: usize, v: T) -> Result<(), Error>
     where
         T: ToOCaml<T>,
     {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
-        unsafe { self.set_unchecked(rt, i, v) }
+        {
+            self.set_unchecked(rt, i, v)
+        }
         Ok(())
     }
 
@@ -213,14 +219,11 @@ impl<T> Array<T> {
     }
 
     /// Get array index
-    pub fn get(&self, rt: &mut Runtime, i: usize) -> Result<T, Error>
-    where
-        T: FromOCaml<T>,
-    {
+    pub unsafe fn get(&self, i: usize) -> Result<Value, Error> {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
-        Ok(unsafe { self.get_unchecked(rt, i) })
+        Ok(self.get_unchecked(i))
     }
 
     /// Get array index without bounds checking
@@ -229,32 +232,33 @@ impl<T> Array<T> {
     ///
     /// This function does not perform bounds checking
     #[inline]
-    pub unsafe fn get_unchecked(&self, rt: &mut Runtime, i: usize) -> T
-    where
-        T: FromOCaml<T>,
-    {
-        T::from_ocaml(&OCaml::new(rt, self.0.field(i).0))
+    pub unsafe fn get_unchecked(&self, i: usize) -> Value {
+        self.0.field(i)
     }
 
     /// Array as slice
-    pub fn as_slice(&self) -> &[Value] {
-        unsafe { crate::value::slice(self.0) }
+    pub unsafe fn as_slice(&self) -> &[Value] {
+        {
+            crate::value::slice(self.0)
+        }
     }
 
     /// Array as mutable slice
-    pub fn as_mut_slice(&mut self) -> &mut [Value] {
-        unsafe { crate::value::mut_slice(self.0) }
+    pub unsafe fn as_mut_slice(&mut self) -> &mut [Value] {
+        {
+            crate::value::mut_slice(self.0)
+        }
     }
 
     /// Array as `Vec`
     #[cfg(not(feature = "no-std"))]
-    pub fn to_vec(&self, rt: &mut Runtime) -> Vec<T>
+    pub unsafe fn to_vec(&self, rt: &mut Runtime) -> Vec<T>
     where
         T: FromOCaml<T>,
     {
         self.as_slice()
             .iter()
-            .map(|x| unsafe { T::from_ocaml(&OCaml::new(rt, x.0)) })
+            .map(|x| T::from_ocaml(&OCaml::new(rt, x.0)))
             .collect()
     }
 }
@@ -263,15 +267,15 @@ impl<T> Array<T> {
 /// additional overhead compared to a `Value` type
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct List<T: ToOCaml<T> + FromOCaml<T>>(Value, PhantomData<T>);
+pub struct List<T>(Value, PhantomData<T>);
 
-unsafe impl<T: ToOCaml<T> + FromOCaml<T>> ToOCaml<List<T>> for List<T> {
+unsafe impl<T> ToOCaml<List<T>> for List<T> {
     fn to_ocaml(&self, _token: AllocToken) -> AllocResult<List<T>> {
         AllocResult::of((self.0).0)
     }
 }
 
-unsafe impl<T: ToOCaml<T> + FromOCaml<T>> FromOCaml<List<T>> for List<T> {
+unsafe impl<T> FromOCaml<List<T>> for List<T> {
     fn from_ocaml(value: &OCaml<List<T>>) -> Self {
         unsafe { List(Value(value.raw()), PhantomData) }
     }
@@ -652,7 +656,7 @@ pub(crate) mod bigarray_ext {
 
         unsafe fn dim(&self) -> &[usize] {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 3) }
+            slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 3)
         }
     }
 

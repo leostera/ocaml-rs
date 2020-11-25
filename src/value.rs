@@ -27,6 +27,12 @@ unsafe impl FromOCaml<Value> for Value {
     }
 }
 
+impl<'a, T> From<OCaml<'a, T>> for Value {
+    fn from(v: OCaml<'a, T>) -> Value {
+        unsafe { Value(v.raw()) }
+    }
+}
+
 const NONE: Value = Value(sys::NONE);
 const UNIT: Value = Value(sys::UNIT);
 
@@ -44,6 +50,21 @@ impl Value {
     pub unsafe fn register(self, rt: &mut Runtime) -> Value {
         let r = alloc_value!(rt, self);
         r
+    }
+
+    /// Get OCaml value
+    pub unsafe fn ocaml<'a, T>(&'a self, rt: &'a mut Runtime) -> OCaml<'a, T> {
+        OCaml::new(rt, self.0)
+    }
+
+    /// Get generic OCaml value
+    pub unsafe fn of_ocaml<'a, T>(value: &OCaml<'a, T>) -> Value {
+        Value(value.raw())
+    }
+
+    /// Get Rust value
+    pub unsafe fn rust<'a, X, T: FromOCaml<X>>(&'a self, rt: &'a mut Runtime) -> T {
+        self.ocaml::<X>(rt).to_rust()
     }
 
     /// Returns a named value registered by OCaml
