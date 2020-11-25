@@ -167,22 +167,36 @@ impl Error {
         OCamlAllocResult::of_ocaml(ocaml_alloc!(e.to_ocaml(rt)))
     }
 
-    /// Wrap std::error::Error value
-    pub unsafe fn result<T: ToOCaml<T>>(rt: &mut Runtime, value: Result<T, Error>) -> Value {
-        let token = rt.token();
+    /// Wrap Error value
+    pub unsafe fn result<T>(rt: &mut Runtime, value: Result<OCaml<T>, OCaml<Error>>) -> Value {
         match value {
             Ok(value) => {
-                let value: Value = Value::of_ocaml(&value.to_ocaml(token).mark(rt).eval(rt));
+                let value: Value = Value::of_ocaml(&value);
                 if value.is_exception_result() {
-                    return Error::result::<T>(
-                        rt,
-                        Err(CamlError::Exception(value.exception().unwrap()).into()),
-                    );
+                    let e = {
+                        Error::Caml(CamlError::Exception(value.exception().unwrap()).into())
+                            .to_ocaml(rt.token())
+                            .mark(rt)
+                            .eval(rt)
+                    };
+                    let e: Error = e.to_rust();
+                    let e = e.to_ocaml(rt.token()).mark(rt).eval(rt);
+                    return Value::of_ocaml(&e);
                 }
                 value
             }
-            Err(e) => e.to_ocaml(token).mark(rt).eval(rt).into(),
+            Err(e) => {
+                let e: Error = e.to_rust();
+                let e = e.to_ocaml(rt.token()).mark(rt).eval(rt);
+                Value::of_ocaml(&e)
+            }
         }
+    }
+}
+
+unsafe impl FromOCaml<Error> for Error {
+    fn from_ocaml(value: &OCaml<Error>) -> Error {
+        unsafe { Error::Caml(CamlError::Exception(Value::of_ocaml(value))) }
     }
 }
 

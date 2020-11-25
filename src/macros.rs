@@ -49,21 +49,40 @@ macro_rules! body {
         #[allow(unused_unsafe)]
         let mut $rt = $crate::OCamlRuntime::init();
 
-        // Execute Rust function
-        #[allow(unused_mut)]
-        let mut res = |$rt: &mut $crate::OCamlRuntime| $code;
-        let res = res(&mut $rt);
+        let res = {
+            // Execute Rust function
+            #[allow(unused_mut)]
+            let mut res = |$rt: &mut $crate::OCamlRuntime| $code;
+            let res = res(&mut $rt);
 
-        let tmp = &mut $rt;
-        let res = $crate::ocaml_alloc!(res.to_ocaml(tmp));
-        let res: Result<_, OCaml<$crate::Error>> = res.to_result();
+            let res = res.to_ocaml($rt.token()).mark(&mut $rt).eval(&mut $rt);
+            let res: Result<_, OCaml<$crate::Error>> = res.to_result();
+            res
+        };
+
         match res {
-            Ok(x) => x.into(),
+            Ok(value) => {
+                let value: Value = Value::of_ocaml(&value);
+                if value.is_exception_result() {
+                    let e = {
+                        Error::Caml(CamlError::Exception(value.exception().unwrap()).into())
+                            .to_ocaml($rt.token())
+                            .mark(&mut $rt)
+                            .eval(&mut $rt)
+                    };
+                    let e: Error = e.to_rust();
+                    let e = e.to_ocaml($rt.token()).mark(&mut $rt).eval(&mut $rt);
+                    return Value::of_ocaml(&e);
+                }
+                value
+            }
             Err(e) => {
-                panic!("XXX")
-                //let e: Error = e.into();
-                //e.to_ocaml(tmp)
+                let e: Error = e.to_rust();
+                let e = e.to_ocaml($rt.token()).mark(&mut $rt).eval(&mut $rt);
+                Value::of_ocaml(&e)
             }
         }
+
+        //Error::result(&mut $rt, res)
     }};
 }
