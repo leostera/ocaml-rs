@@ -1,34 +1,33 @@
 use crate as ocaml;
 
-use crate::{Error, FromValue, ToValue, Value};
+use crate::*;
 
-#[test]
+/*#[test]
 fn test_basic_array() -> Result<(), Error> {
-    ocaml::runtime::init();
-    let mut a: ocaml::Array<&str> = ocaml::Array::alloc(2);
-    a.set(0, "testing")?;
-    a.set(1, "123")?;
-    let b: Vec<&str> = FromValue::from_value(a.to_value());
-    assert!(b.as_slice() == &["testing", "123"]);
+    let mut rt = ocaml::OCamlRuntime::init();
+    let mut a: ocaml::Array<String> = ocaml::Array::alloc(&mut rt, 2);
+    a.set(&mut rt, 0, "testing".to_string())?;
+    a.set(&mut rt, 1, "123".to_string())?;
+    let b: ocaml::OCaml<Array<String>> = FromOCaml::from_ocaml(&ocaml_alloc!(a.to_ocaml(&mut rt)));
+    assert!(b.into().as_slice() == &["testing", "123"]);
     Ok(())
-}
+}*/
 
-#[ocaml::func]
-pub fn make_tuple(a: Value, b: Value) -> (Value, Value) {
+/*#[ocaml::func]
+pub fn make_tuple(a: OCaml<Value>, b: OCaml<Value>) -> (Value, Value) {
     (a, b)
 }
 
 #[test]
 fn test_tuple_of_tuples() {
-    ocaml::runtime::init();
-
     ocaml::body!({
-        let x = (1f64, 2f64, 3f64, 4f64, 5f64, 6f64, 7f64, 8f64, 9f64).to_value();
-        let y = (9f64, 8f64, 7f64, 6f64, 5f64, 4f64, 3f64, 2f64, 1f64).to_value();
+        let x = (1f64, 2f64, 3f64, 4f64, 5f64, 6f64, 7f64, 8f64, 9f64).to_ocaml(rt);
+        let y = (9f64, 8f64, 7f64, 6f64, 5f64, 4f64, 3f64, 2f64, 1f64).to_value(rt);
+        let r = make_tuple(x, y);
         let ((a, b, c, d, e, f, g, h, i), (j, k, l, m, n, o, p, q, r)): (
             (f64, f64, f64, f64, f64, f64, f64, f64, f64),
             (f64, f64, f64, f64, f64, f64, f64, f64, f64),
-        ) = FromValue::from_value(make_tuple(x, y));
+        ) = FromOCaml::from_ocaml(&ocaml_alloc!(r.to_ocaml(rt)));
 
         println!("a: {}, r: {}", a, r);
         assert!(a == r);
@@ -41,33 +40,28 @@ fn test_tuple_of_tuples() {
         assert!(h == k);
         assert!(i == j);
     })
-}
+}*/
 
 #[test]
 fn test_basic_list() {
-    ocaml::runtime::init();
     ocaml::body!({
         let mut list = ocaml::List::empty();
-        let a = 3i64.to_value();
-        let b = 2i64.to_value();
-        let c = 1i64.to_value();
-        list = list.add(a);
-        list = list.add(b);
-        list = list.add(c);
+        list = list.add(rt, 3i64);
+        list = list.add(rt, 2i64);
+        list = list.add(rt, 1i64);
 
         assert!(list.len() == 3);
 
-        let ll: std::collections::LinkedList<i64> = FromValue::from_value(list.to_value());
+        let ll: OCaml<List<i64>> = FromOCaml::from_ocaml(&ocaml_alloc!(list.to_ocaml(rt)));
 
-        for (i, x) in ll.into_iter().enumerate() {
-            assert!((i + 1) as i64 == x);
+        for (i, x) in ll.iter().enumerate() {
+            assert!((i + 1) as i64 == *x);
         }
     })
 }
 
-#[test]
+/*#[test]
 fn test_int() {
-    ocaml::runtime::init();
     ocaml::body!({
         let a = (-123isize).to_value();
         let b = (-1isize).to_value();
@@ -86,4 +80,4 @@ fn test_int() {
         assert_eq!(d_, 1);
         assert_eq!(e_, 0);
     })
-}
+}*/

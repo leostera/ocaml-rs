@@ -1,4 +1,4 @@
-use ocaml::{FromValue, Value};
+use ocaml::*;
 
 struct Testing {
     a: ocaml::Float,

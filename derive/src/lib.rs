@@ -89,7 +89,7 @@ pub fn ocaml_func(_attribute: TokenStream, item: TokenStream) -> TokenStream {
         .filter_map(|arg| match arg {
             Some(ident) => {
                 let ident = ident.ident.clone();
-                Some(quote! { let #ident = ocaml::FromValue::from_value(#ident); })
+                Some(quote! { let #ident = ocaml::OCaml::new(rt, #ident).to_rust(); })
             }
             None => None,
         })
@@ -148,11 +148,11 @@ pub fn ocaml_func(_attribute: TokenStream, item: TokenStream) -> TokenStream {
             #attr
         )*
         pub #constness #unsafety extern "C" fn #name(#(#ocaml_args),*) -> ocaml::Value #where_clause {
-            ocaml::body!((#param_names) {
+            ocaml::body!({
                 #inner
                 #(#convert_params);*
                 let res = inner(#param_names);
-                ocaml::ToValue::to_value(res)
+                ocaml::ToOCaml::to_ocaml(rt, res)
             })
         }
     };
@@ -261,7 +261,7 @@ pub fn ocaml_native_func(_attribute: TokenStream, item: TokenStream) -> TokenStr
             #attr
         )*
         pub #constness #unsafety extern "C" fn #name (#rust_args) -> #rust_return_type #where_clause {
-            ocaml::body!((#param_names) {
+            ocaml::body!({
                 #body
             })
         }

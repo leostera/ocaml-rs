@@ -1,15 +1,11 @@
-#[cfg(not(feature = "no-std"))]
+/*#[cfg(not(feature = "no-std"))]
 static PANIC_HANDLER_INIT: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+    std::sync::atomic::AtomicBool::new(false);*/
 
-#[cfg(not(feature = "no-std"))]
 #[doc(hidden)]
 pub fn init_panic_handler() {
-    if PANIC_HANDLER_INIT.compare_and_swap(false, true, std::sync::atomic::Ordering::Relaxed) {
-        return;
-    }
-
-    ::std::panic::set_hook(Box::new(|info| {
+    #[cfg(not(feature = "no-std"))]
+    ::std::panic::set_hook(Box::new(|info| unsafe {
         let err = info.payload();
         let msg = if err.is::<&str>() {
             err.downcast_ref::<&str>().unwrap()
@@ -19,12 +15,14 @@ pub fn init_panic_handler() {
             "rust panic"
         };
 
+        let mut rt = crate::OCamlRuntime::recover_handle();
+
         if let Some(err) = crate::Value::named("Rust_exception") {
-            crate::Error::raise_value(err, msg);
+            crate::Error::raise_value(&mut rt, err, msg);
         }
 
-        crate::Error::raise_failure(msg)
-    }))
+        crate::Error::raise_failure(&mut rt, msg)
+    }));
 }
 
 /// `body!` is needed to help the OCaml runtime to manage garbage collection, it should
@@ -42,49 +40,20 @@ pub fn init_panic_handler() {
 /// }
 /// ```
 #[macro_export]
-#[cfg(not(feature = "no-std"))]
 macro_rules! body {
-    ($(($($param:expr),*))? $code:block) => {{
+    ($code:block) => {{
         // Ensure panic handler is initialized
         $crate::init_panic_handler();
 
         // Initialize OCaml frame
         #[allow(unused_unsafe)]
-        let caml_frame = unsafe { $crate::sys::local_roots() };
-
-        // Initialize parameters
-        $(
-            $crate::sys::caml_param!($($param.0),*);
-        )?
+        let rt = OCamlRuntime::init();
 
         // Execute Rust function
         #[allow(unused_mut)]
-        let mut res = || {$code };
-        let res = res();
-
-        #[allow(unused_unsafe)]
-        unsafe { $crate::sys::set_local_roots(caml_frame) };
+        let mut res = |rt: &mut OCamlRuntime| $code;
+        let res = res(&mut rt);
 
         res
-    }}
-}
-
-#[macro_export]
-/// Convenience macro to create an OCaml array
-macro_rules! array {
-    ($($x:expr),*) => {{
-        $crate::ToValue::to_value(&vec![$($crate::ToValue::to_value(&$x)),*])
-    }}
-}
-
-#[macro_export]
-/// Convenience macro to create an OCaml list
-macro_rules! list {
-    ($($x:expr),*) => {{
-        let mut l = $crate::list::empty();
-        for i in (&[$($x),*]).into_iter().rev() {
-            $crate::list::push_hd(&mut l, $crate::ToValue::to_value(i));
-        }
-        l
     }};
 }

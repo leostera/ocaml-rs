@@ -104,14 +104,19 @@
 #[cfg(all(feature = "link", feature = "no-std"))]
 std::compile_error!("Cannot use link and no-std features");
 
-pub use ocaml_interop::*;
+pub use ocaml_interop::{
+    OCamlAllocResult as AllocResult, OCamlAllocToken as AllocToken, OCamlRuntime as Runtime, *,
+};
 
 /// The `sys` module contains the low-level implementation of the OCaml runtime
 pub use ocaml_sys as sys;
 
 #[cfg(feature = "derive")]
 pub use ocaml_derive::{
-    ocaml_bytecode_func as bytecode_func, ocaml_func as func, ocaml_native_func as native_func,
+    ocaml_bytecode_func as bytecode_func,
+    ocaml_func as func,
+    ocaml_native_func as native_func,
+    //FromOCaml, ToOCaml,
 };
 
 #[macro_use]
@@ -134,8 +139,9 @@ pub use crate::custom::Custom;
 pub use crate::error::{CamlError, Error};
 pub use crate::runtime::*;
 pub use crate::tag::Tag;
-pub use crate::types::{bigarray, Array, List, Pointer};
 pub use crate::value::Value;
+
+pub use crate::types::{bigarray, Array, List, Pointer};
 
 #[cfg(not(feature = "no-std"))]
 pub use crate::macros::init_panic_handler;

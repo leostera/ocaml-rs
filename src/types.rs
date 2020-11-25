@@ -2,11 +2,7 @@
 
 use crate::*;
 
-use core::{
-    iter::{IntoIterator, Iterator},
-    marker::PhantomData,
-    mem, slice,
-};
+use core::{iter::Iterator, marker::PhantomData, mem, slice};
 
 use crate::value::{Size, Value};
 
@@ -18,15 +14,15 @@ use crate::value::{Size, Value};
 #[repr(transparent)]
 pub struct Pointer<T>(pub Value, PhantomData<T>);
 
-impl<T> ToOCaml for Pointer<T> {
-    fn to_ocaml(self, alloc: OCamlAllocToken) -> OCamlAllocResult<Pointer<T>> {
-        OCamlAllocResult::of(self.0)
+unsafe impl<T> ToOCaml<Pointer<T>> for Pointer<T> {
+    fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Pointer<T>> {
+        AllocResult::of((self.0).0)
     }
 }
 
-impl<T> FromOCaml for Pointer<T> {
-    fn from_ocaml(value: OCaml<Pointer<T>>) -> Self {
-        unsafe { Pointer(value.raw(), PhantomData) }
+unsafe impl<T> FromOCaml<Pointer<T>> for Pointer<T> {
+    fn from_ocaml(value: &OCaml<Pointer<T>>) -> Self {
+        unsafe { Pointer(Value(value.raw()), PhantomData) }
     }
 }
 
@@ -37,25 +33,29 @@ impl<T> Pointer<T> {
     ///
     /// This calls `caml_alloc_final` under-the-hood, which can has less than ideal performance
     /// behavior. In most cases you should prefer `Poiner::alloc_custom` when possible.
-    pub fn alloc_final(
+    pub unsafe fn alloc_final(
+        rt: &mut Runtime,
         x: T,
         finalizer: Option<unsafe extern "C" fn(Value)>,
         used_max: Option<(usize, usize)>,
     ) -> Pointer<T> {
-        let mut ptr = Pointer::from_value(match finalizer {
-            Some(f) => Value::alloc_final::<T>(f, used_max),
-            None => Value::alloc_final::<T>(ignore, used_max),
-        });
+        let mut ptr = Pointer(
+            match finalizer {
+                Some(f) => Value::alloc_final::<T>(rt, f, used_max),
+                None => Value::alloc_final::<T>(rt, ignore, used_max),
+            },
+            PhantomData,
+        );
         ptr.set(x);
         ptr
     }
 
     /// Allocate a `Custom` value
-    pub fn alloc_custom(rt: OCamlRuntime, x: T) -> Pointer<T>
+    pub unsafe fn alloc_custom(rt: &mut Runtime, x: T) -> Pointer<T>
     where
         T: crate::Custom,
     {
-        let mut ptr = Pointer::from_value(Value::alloc_custom::<T>(rt));
+        let mut ptr = Pointer(Value::alloc_custom::<T>(rt), PhantomData);
         ptr.set(x);
         ptr
     }
@@ -70,19 +70,17 @@ impl<T> Pointer<T> {
     }
 
     /// Replace the inner value with the provided argument
-    pub fn set(&mut self, x: T) {
-        unsafe {
-            core::ptr::write_unaligned(self.as_mut_ptr(), x);
-        }
+    pub unsafe fn set(&mut self, x: T) {
+        core::ptr::write_unaligned(self.as_mut_ptr(), x);
     }
 
     /// Access the underlying pointer
-    pub fn as_ptr(&self) -> *const T {
+    pub unsafe fn as_ptr(&self) -> *const T {
         self.0.custom_ptr_val()
     }
 
     /// Access the underlying mutable pointer
-    pub fn as_mut_ptr(&mut self) -> *mut T {
+    pub unsafe fn as_mut_ptr(&mut self) -> *mut T {
         self.0.custom_ptr_val_mut()
     }
 }
@@ -102,23 +100,23 @@ impl<T> AsMut<T> for Pointer<T> {
 /// `Array<A>` wraps an OCaml `'a array` without converting it to Rust
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct Array<T: ToOCaml + ToRust>(Value, PhantomData<T>);
+pub struct Array<T>(Value, PhantomData<T>);
 
-unsafe impl<T: ToOCaml + ToRust> ToOCaml for Array<T> {
-    fn to_ocaml(self, token: OCamlAllocToken) -> OCamlAllocResult {
-        OCamlAllocResult::of(self.0)
+unsafe impl<T: ToOCaml<T> + FromOCaml<T>> ToOCaml<Array<T>> for Array<T> {
+    fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Array<T>> {
+        AllocResult::of((self.0).0)
     }
 }
 
-unsafe impl<T: ToOCaml + ToRust> FromOCaml for Array<T> {
-    fn from_ocaml(value: OCaml<Array<T>>) -> Self {
-        unsafe { Array(value.raw(), PhantomData) }
+unsafe impl<T: ToOCaml<T> + FromOCaml<T>> FromOCaml<Array<T>> for Array<T> {
+    fn from_ocaml(value: &OCaml<Array<T>>) -> Self {
+        unsafe { Array(Value(value.raw()), PhantomData) }
     }
 }
 
-impl<'a> Array<f64> {
+impl<'a> Array<OCamlFloat> {
     /// Set value to double array
-    pub fn set_double(&mut self, i: usize, f: f64) -> Result<(), Error> {
+    pub unsafe fn set_double(&mut self, i: usize, f: f64) -> Result<(), Error> {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
@@ -127,9 +125,7 @@ impl<'a> Array<f64> {
             return Err(Error::NotDoubleArray);
         }
 
-        unsafe {
-            self.set_double_unchecked(i, f);
-        };
+        self.set_double_unchecked(i, f);
 
         Ok(())
     }
@@ -145,7 +141,7 @@ impl<'a> Array<f64> {
     }
 
     /// Get a value from a double array
-    pub fn get_double(self, i: usize) -> Result<f64, Error> {
+    pub unsafe fn get_double(self, i: usize) -> Result<f64, Error> {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
@@ -153,7 +149,7 @@ impl<'a> Array<f64> {
             return Err(Error::NotDoubleArray);
         }
 
-        Ok(unsafe { self.get_double_unchecked(i) })
+        Ok(self.get_double_unchecked(i))
     }
 
     /// Get a value from a double array without checking if the array is actually a double array
@@ -167,11 +163,10 @@ impl<'a> Array<f64> {
     }
 }
 
-impl<T: ToOCaml + ToRust> Array<T> {
+impl<T> Array<T> {
     /// Allocate a new Array
-    pub fn alloc(rt: OCamlRuntime, n: usize) -> Array<T> {
-        let x = unsafe { Value(sys::caml_alloc(n, 0)) };
-        let x = ocaml_alloc!(x.to_ocaml(rt));
+    pub unsafe fn alloc(rt: &mut Runtime, n: usize) -> Array<T> {
+        let x = Value(sys::caml_alloc(n, 0)).register(rt);
         Array(x, PhantomData)
     }
 
@@ -192,11 +187,14 @@ impl<T: ToOCaml + ToRust> Array<T> {
     }
 
     /// Set array index
-    pub fn set(&mut self, i: usize, v: T) -> Result<(), Error> {
+    pub fn set(&mut self, rt: &mut Runtime, i: usize, v: T) -> Result<(), Error>
+    where
+        T: ToOCaml<T>,
+    {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
-        unsafe { self.set_unchecked(i, v) }
+        unsafe { self.set_unchecked(rt, i, v) }
         Ok(())
     }
 
@@ -206,16 +204,23 @@ impl<T: ToOCaml + ToRust> Array<T> {
     ///
     /// This function does not perform bounds checking
     #[inline]
-    pub unsafe fn set_unchecked(&mut self, i: usize, v: T) {
-        self.0.store_field(i, v);
+    pub unsafe fn set_unchecked(&mut self, rt: &mut Runtime, i: usize, v: T)
+    where
+        T: ToOCaml<T>,
+    {
+        self.0
+            .store_field(i, Value(ocaml_alloc!(v.to_ocaml(rt)).raw()));
     }
 
     /// Get array index
-    pub fn get(&self, i: usize) -> Result<T, Error> {
+    pub fn get(&self, rt: &mut Runtime, i: usize) -> Result<T, Error>
+    where
+        T: FromOCaml<T>,
+    {
         if i >= self.len() {
             return Err(CamlError::ArrayBoundError.into());
         }
-        Ok(unsafe { self.get_unchecked(i) })
+        Ok(unsafe { self.get_unchecked(rt, i) })
     }
 
     /// Get array index without bounds checking
@@ -224,24 +229,33 @@ impl<T: ToOCaml + ToRust> Array<T> {
     ///
     /// This function does not perform bounds checking
     #[inline]
-    pub unsafe fn get_unchecked(&self, i: usize) -> T {
-        T::from_value(self.0.field(i))
+    pub unsafe fn get_unchecked(&self, rt: &mut Runtime, i: usize) -> T
+    where
+        T: FromOCaml<T>,
+    {
+        T::from_ocaml(&OCaml::new(rt, self.0.field(i).0))
     }
 
     /// Array as slice
     pub fn as_slice(&self) -> &[Value] {
-        Value::slice(*self)
+        unsafe { crate::value::slice(self.0) }
     }
 
     /// Array as mutable slice
     pub fn as_mut_slice(&mut self) -> &mut [Value] {
-        Value::mut_slice(self.0)
+        unsafe { crate::value::mut_slice(self.0) }
     }
 
     /// Array as `Vec`
     #[cfg(not(feature = "no-std"))]
-    pub fn to_vec(&self) -> Vec<T> {
-        self.as_slice().map(|x| x.to_rust()).collect()
+    pub fn to_vec(&self, rt: &mut Runtime) -> Vec<T>
+    where
+        T: FromOCaml<T>,
+    {
+        self.as_slice()
+            .iter()
+            .map(|x| unsafe { T::from_ocaml(&OCaml::new(rt, x.0)) })
+            .collect()
     }
 }
 
@@ -249,29 +263,29 @@ impl<T: ToOCaml + ToRust> Array<T> {
 /// additional overhead compared to a `Value` type
 #[derive(Clone, Copy, PartialEq)]
 #[repr(transparent)]
-pub struct List<T: ToOCaml + ToRust>(Value, PhantomData<T>);
+pub struct List<T: ToOCaml<T> + FromOCaml<T>>(Value, PhantomData<T>);
 
-unsafe impl<T: ToOCaml + ToRust> ToOCaml for List<T> {
-    fn to_ocaml(self, token: OCamlAllocToken) -> OCamlAllocResult<List<T>> {
-        OCamlAllocResult::of(self.0)
+unsafe impl<T: ToOCaml<T> + FromOCaml<T>> ToOCaml<List<T>> for List<T> {
+    fn to_ocaml(&self, _token: AllocToken) -> AllocResult<List<T>> {
+        AllocResult::of((self.0).0)
     }
 }
 
-unsafe impl<T: ToOCaml + ToRust> FromOCaml for List<T> {
-    fn from_ocaml(value: OCaml<List<T>>) -> Self {
-        unsafe { List(value.raw(), PhantomData) }
+unsafe impl<T: ToOCaml<T> + FromOCaml<T>> FromOCaml<List<T>> for List<T> {
+    fn from_ocaml(value: &OCaml<List<T>>) -> Self {
+        unsafe { List(Value(value.raw()), PhantomData) }
     }
 }
 
-impl<T: ToOCaml + FromOCaml> List<T> {
+impl<T: ToOCaml<T> + FromOCaml<T>> List<T> {
     /// An empty list
     #[inline(always)]
-    pub fn empty() -> List<T> {
+    pub unsafe fn empty() -> List<T> {
         List(Value::unit(), PhantomData)
     }
 
     /// Returns the number of items in `self`
-    pub fn len(&self) -> usize {
+    pub unsafe fn len(&self) -> usize {
         let mut length = 0;
         let mut tmp = self.0;
         while tmp.0 != sys::EMPTY_LIST {
@@ -282,44 +296,45 @@ impl<T: ToOCaml + FromOCaml> List<T> {
     }
 
     /// Returns true when the list is empty
-    pub fn is_empty(&self) -> bool {
+    pub unsafe fn is_empty(&self) -> bool {
         self.0 == Self::empty().0
     }
 
     /// Add an element to the front of the list returning the new list
     #[must_use]
     #[allow(clippy::should_implement_trait)]
-    pub fn add(self, rt: OCamlRuntime, v: T) -> List<T> {
+    pub fn add(self, rt: &mut Runtime, v: T) -> List<T> {
         let tmp = unsafe {
             let mut tmp = Value(sys::caml_alloc(2, 0));
-            tmp.store_field(0, v.to_ocaml(rt));
+            tmp.store_field(0, Value(ocaml_alloc!(v.to_ocaml(rt)).raw()));
             tmp.store_field(1, self.0);
+            tmp
         };
         List(tmp, PhantomData)
     }
 
     /// List head
-    pub fn hd(&self) -> Option<T> {
+    pub unsafe fn hd(&self, rt: &mut Runtime) -> Option<T> {
         if self.is_empty() {
             return None;
         }
 
-        Some(self.0.field(0))
+        Some(T::from_ocaml(&OCaml::new(rt, self.0.field(0).0)))
     }
 
     /// List tail
-    pub fn tl(&self) -> List<T> {
+    pub unsafe fn tl(&self, rt: &Runtime) -> List<T> {
         if self.is_empty() {
             return Self::empty();
         }
 
-        self.0.field(1)
+        List::from_ocaml(&OCaml::new(rt, self.0.field(1).0))
     }
 
     #[cfg(not(feature = "no-std"))]
     /// List as `Vec`
-    pub fn to_vec(&self) -> Vec<T> {
-        self.iter().collect()
+    pub unsafe fn to_vec(&self, rt: &mut Runtime) -> Vec<T> {
+        self.iter(rt).collect()
     }
 
     /*#[cfg(not(feature = "no-std"))]
@@ -329,44 +344,35 @@ impl<T: ToOCaml + FromOCaml> List<T> {
     }*/
 
     /// List iterator
-    pub fn iter(&self) -> ListIterator<T> {
+    pub unsafe fn iter<'a>(&self, rt: &'a mut Runtime) -> ListIterator<'a, T> {
         ListIterator {
+            rt,
             inner: self.0,
             _marker: PhantomData,
         }
     }
 }
 
-impl<T: ToOCaml + FromOCaml> IntoIterator for List<T> {
-    type Item = T;
-    type IntoIter = ListIterator<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
 /// List iterator.
-pub struct ListIterator<T: ToOCaml + FromOCaml> {
+pub struct ListIterator<'a, T: ToOCaml<T> + FromOCaml<T>> {
     inner: Value,
+    rt: &'a mut Runtime,
     _marker: PhantomData<T>,
 }
 
-impl<T: ToOCaml + FromOCaml> Iterator for ListIterator<T> {
+impl<'a, T: ToOCaml<T> + FromOCaml<T>> Iterator for ListIterator<'a, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.inner != Value::unit() {
-            let val = self.inner.field(0);
-            self.inner = self.inner.field(1);
-            Some(val)
+            self.inner = unsafe { self.inner.field(1) };
+            unsafe { List(self.inner, PhantomData).hd(self.rt) }
         } else {
             None
         }
     }
 }
 
-/*
 /// `bigarray` contains wrappers for OCaml `Bigarray` values. These types can be used to transfer arrays of numbers between Rust
 /// and OCaml directly without the allocation overhead of an `array` or `list`
 pub mod bigarray {
@@ -408,103 +414,94 @@ pub mod bigarray {
     /// additional overhead compared to a `Value` type
     #[repr(transparent)]
     #[derive(Clone, Copy, PartialEq)]
-    pub struct Array1<T>(Value, PhantomData<T>);
+    pub struct Array1<'a, T>(Value, PhantomData<&'a T>);
 
-    unsafe impl<T> crate::FromValue for Array1<T> {
-        fn from_value(value: Value) -> Array1<T> {
-            Array1(value, PhantomData)
+    unsafe impl<'a, T> FromOCaml<Array1<'a, T>> for Array1<'a, T> {
+        fn from_ocaml(value: &OCaml<'_, Array1<'a, T>>) -> Array1<'a, T> {
+            unsafe { Array1(Value(value.raw()), PhantomData) }
         }
     }
 
-    unsafe impl<T> crate::ToValue for Array1<T> {
-        fn to_value(self) -> Value {
-            self.0
+    unsafe impl<'a, T> ToOCaml<Array1<'a, T>> for Array1<'a, T> {
+        fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Array1<'a, T>> {
+            AllocResult::of((self.0).0)
         }
     }
 
-    #[cfg(not(feature = "no-std"))]
-    impl<T: Copy + Kind> From<&'static [T]> for Array1<T> {
-        fn from(x: &'static [T]) -> Array1<T> {
-            Array1::from_slice(x)
-        }
-    }
-
-    #[cfg(not(feature = "no-std"))]
-    impl<T: Copy + Kind> From<Vec<T>> for Array1<T> {
-        fn from(x: Vec<T>) -> Array1<T> {
-            let mut arr = Array1::<T>::create(x.len());
+    impl<'a, T: Copy + Kind> Array1<'a, T> {
+        /// Create new 1-dimensional array from an existing Vec
+        pub unsafe fn from_vec(rt: &mut Runtime, x: Vec<T>) -> Array1<'a, T> {
+            let mut arr = Array1::<T>::create(rt, x.len());
             let data = arr.data_mut();
             data.copy_from_slice(x.as_slice());
             arr
         }
-    }
 
-    impl<T: Copy + Kind> Array1<T> {
         /// Array1::of_slice is used to convert from a slice to OCaml Bigarray,
         /// the `data` parameter must outlive the resulting bigarray or there is
         /// no guarantee the data will be valid. Use `Array1::from_slice` to clone the
         /// contents of a slice.
-        pub fn of_slice(data: &mut [T]) -> Array1<T> {
-            let x = crate::frame!((x) {
-                x = unsafe {
-                    Value(bigarray::caml_ba_alloc_dims(
-                        T::kind() | bigarray::Managed::EXTERNAL as i32,
-                        1,
-                        data.as_mut_ptr() as bigarray::Data,
-                        data.len() as sys::Intnat,
-                    ))
-                };
-                x
-            });
+        pub unsafe fn of_slice(rt: &mut Runtime, data: &'a mut [T]) -> Array1<'a, T> {
+            let x = {
+                Value(bigarray::caml_ba_alloc_dims(
+                    T::kind() | bigarray::Managed::EXTERNAL as i32,
+                    1,
+                    data.as_mut_ptr() as bigarray::Data,
+                    data.len() as sys::Intnat,
+                ))
+                .register(rt)
+            };
             Array1(x, PhantomData)
         }
 
         /// Convert from a slice to OCaml Bigarray, copying the array. This is the implemtation
         /// used by `Array1::from` for slices to avoid any potential lifetime issues
         #[cfg(not(feature = "no-std"))]
-        pub fn from_slice(data: &[T]) -> Array1<T> {
-            Array1::from(data.to_vec())
+        pub unsafe fn from_slice(rt: &'a mut Runtime, data: &'a [T]) -> Array1<'a, T> {
+            Array1::from_vec(rt, data.to_vec())
         }
 
         /// Create a new OCaml `Bigarray.Array1` with the given type and size
-        pub fn create(n: Size) -> Array1<T> {
-            let x = crate::frame!((x) {
-                let data = unsafe { bigarray::malloc(n * mem::size_of::<T>()) };
-                x = unsafe {
-                    Value(bigarray::caml_ba_alloc_dims(
-                        T::kind() | bigarray::Managed::MANAGED as i32,
-                        1,
-                        data,
-                        n as sys::Intnat,
-                    ))
-                };
-                x
-            });
+        pub unsafe fn create(rt: &mut Runtime, n: Size) -> Array1<'a, T> {
+            let x = {
+                let data = bigarray::malloc(n * mem::size_of::<T>());
+                Value(bigarray::caml_ba_alloc_dims(
+                    T::kind() | bigarray::Managed::MANAGED as i32,
+                    1,
+                    data,
+                    n as sys::Intnat,
+                ))
+                .register(rt)
+            };
             Array1(x, PhantomData)
         }
 
         /// Returns the number of items in `self`
-        pub fn len(self) -> Size {
+        pub unsafe fn len(self) -> Size {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            let dim = unsafe { slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 1) };
+            let dim = { slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 1) };
             dim[0]
         }
 
         /// Returns true when `self.len() == 0`
-        pub fn is_empty(self) -> bool {
+        pub unsafe fn is_empty(self) -> bool {
             self.len() == 0
         }
 
         /// Get underlying data as Rust slice
-        pub fn data(&self) -> &[T] {
+        pub unsafe fn data(&self) -> &[T] {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { slice::from_raw_parts((*ba).data as *const T, self.len()) }
+            {
+                slice::from_raw_parts((*ba).data as *const T, self.len())
+            }
         }
 
         /// Get underlying data as mutable Rust slice
-        pub fn data_mut(&mut self) -> &mut [T] {
+        pub unsafe fn data_mut(&mut self) -> &mut [T] {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { slice::from_raw_parts_mut((*ba).data as *mut T, self.len()) }
+            {
+                slice::from_raw_parts_mut((*ba).data as *mut T, self.len())
+            }
         }
     }
 
@@ -521,7 +518,7 @@ pub(crate) mod bigarray_ext {
     use crate::{
         bigarray::Kind,
         sys::{self, bigarray},
-        FromValue, ToValue, Value,
+        AllocResult, AllocToken, FromOCaml, OCaml, Runtime, ToOCaml, Value,
     };
 
     /// OCaml Bigarray.Array2 type, this introduces no
@@ -532,78 +529,81 @@ pub(crate) mod bigarray_ext {
 
     impl<T: Copy + Kind> Array2<T> {
         /// Returns array view
-        pub fn view(&self) -> ArrayView2<T> {
+        pub unsafe fn view(&self) -> ArrayView2<T> {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { ArrayView2::from_shape_ptr(self.shape(), (*ba).data as *const T) }
+            {
+                ArrayView2::from_shape_ptr(self.shape(), (*ba).data as *const T)
+            }
         }
 
         /// Returns mutable array view
-        pub fn view_mut(&mut self) -> ArrayViewMut2<T> {
+        pub unsafe fn view_mut(&mut self) -> ArrayViewMut2<T> {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { ArrayViewMut2::from_shape_ptr(self.shape(), (*ba).data as *mut T) }
+            {
+                ArrayViewMut2::from_shape_ptr(self.shape(), (*ba).data as *mut T)
+            }
         }
 
         /// Returns the shape of `self`
-        pub fn shape(&self) -> (usize, usize) {
+        pub unsafe fn shape(&self) -> (usize, usize) {
             let dim = self.dim();
             (dim[0], dim[1])
         }
 
         /// Returns the number of items in `self`
-        pub fn len(&self) -> usize {
+        pub unsafe fn len(&self) -> usize {
             let dim = self.dim();
             dim[0] * dim[1]
         }
 
         /// Returns true when the list is empty
-        pub fn is_empty(&self) -> bool {
+        pub unsafe fn is_empty(&self) -> bool {
             self.len() == 0
         }
 
-        fn dim(&self) -> &[usize] {
+        unsafe fn dim(&self) -> &[usize] {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 2) }
+            {
+                slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 2)
+            }
         }
     }
 
-    unsafe impl<T> FromValue for Array2<T> {
-        fn from_value(value: Value) -> Array2<T> {
-            Array2(value, PhantomData)
+    unsafe impl<T> FromOCaml<Array2<T>> for Array2<T> {
+        fn from_ocaml(value: &OCaml<Array2<T>>) -> Array2<T> {
+            unsafe { Array2(Value(value.raw()), PhantomData) }
         }
     }
 
-    unsafe impl<T> ToValue for Array2<T> {
-        fn to_value(self) -> Value {
-            self.0
+    unsafe impl<T> ToOCaml<Array2<T>> for Array2<T> {
+        fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Array2<T>> {
+            AllocResult::of((self.0).0)
         }
     }
 
     impl<T: Copy + Kind> Array2<T> {
         /// Create a new OCaml `Bigarray.Array2` with the given type and shape
-        pub fn create(dim: ndarray::Ix2) -> Array2<T> {
-            let x = crate::frame!((x) {
-                let data = unsafe { bigarray::malloc(dim.size() * mem::size_of::<T>()) };
-                x = unsafe {
-                    Value(bigarray::caml_ba_alloc_dims(
-                        T::kind() | bigarray::Managed::MANAGED as i32,
-                        2,
-                        data,
-                        dim[0] as sys::Intnat,
-                        dim[1] as sys::Intnat,
-                    ))
-                };
-                x
-            });
+        pub unsafe fn create(rt: &mut Runtime, dim: ndarray::Ix2) -> Array2<T> {
+            let x = {
+                let data = bigarray::malloc(dim.size() * mem::size_of::<T>());
+                Value(bigarray::caml_ba_alloc_dims(
+                    T::kind() | bigarray::Managed::MANAGED as i32,
+                    2,
+                    data,
+                    dim[0] as sys::Intnat,
+                    dim[1] as sys::Intnat,
+                ))
+                .register(rt)
+            };
             Array2(x, PhantomData)
         }
-    }
 
-    impl<T: Copy + Kind> From<ndarray::Array2<T>> for Array2<T> {
-        fn from(data: ndarray::Array2<T>) -> Array2<T> {
+        /// Create `Bigarray.Array2` from an existing `ndarray::Array2`
+        pub unsafe fn from_array(rt: &mut Runtime, data: ndarray::Array2<T>) -> Array2<T> {
             let dim = data.raw_dim();
-            let array = Array2::create(dim);
+            let array = Array2::create(rt, dim);
             let ba = array.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe {
+            {
                 ptr::copy_nonoverlapping(data.as_ptr(), (*ba).data as *mut T, dim.size());
             }
             array
@@ -618,82 +618,83 @@ pub(crate) mod bigarray_ext {
 
     impl<T: Copy + Kind> Array3<T> {
         /// Returns array view
-        pub fn view(&self) -> ArrayView3<T> {
+        pub unsafe fn view(&self) -> ArrayView3<T> {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { ArrayView3::from_shape_ptr(self.shape(), (*ba).data as *const T) }
+            {
+                ArrayView3::from_shape_ptr(self.shape(), (*ba).data as *const T)
+            }
         }
 
         /// Returns mutable array view
-        pub fn view_mut(&mut self) -> ArrayViewMut3<T> {
+        pub unsafe fn view_mut(&mut self) -> ArrayViewMut3<T> {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe { ArrayViewMut3::from_shape_ptr(self.shape(), (*ba).data as *mut T) }
+            {
+                ArrayViewMut3::from_shape_ptr(self.shape(), (*ba).data as *mut T)
+            }
         }
 
         /// Returns the shape of `self`
-        pub fn shape(&self) -> (usize, usize, usize) {
+        pub unsafe fn shape(&self) -> (usize, usize, usize) {
             let dim = self.dim();
             (dim[0], dim[1], dim[2])
         }
 
         /// Returns the number of items in `self`
-        pub fn len(&self) -> usize {
+        pub unsafe fn len(&self) -> usize {
             let dim = self.dim();
             dim[0] * dim[1] * dim[2]
         }
 
         /// Returns true when the list is empty
-        pub fn is_empty(&self) -> bool {
+        pub unsafe fn is_empty(&self) -> bool {
             self.len() == 0
         }
 
-        fn dim(&self) -> &[usize] {
+        unsafe fn dim(&self) -> &[usize] {
             let ba = self.0.custom_ptr_val::<bigarray::Bigarray>();
             unsafe { slice::from_raw_parts((*ba).dim.as_ptr() as *const usize, 3) }
         }
     }
 
-    unsafe impl<T> FromValue for Array3<T> {
-        fn from_value(value: Value) -> Array3<T> {
-            Array3(value, PhantomData)
+    unsafe impl<T> FromOCaml<Array3<T>> for Array3<T> {
+        fn from_ocaml(value: &OCaml<Array3<T>>) -> Array3<T> {
+            unsafe { Array3(Value(value.raw()), PhantomData) }
         }
     }
 
-    unsafe impl<T> ToValue for Array3<T> {
-        fn to_value(self) -> Value {
-            self.0
+    unsafe impl<T> ToOCaml<Array3<T>> for Array3<T> {
+        fn to_ocaml(&self, _token: AllocToken) -> AllocResult<Array3<T>> {
+            AllocResult::of((self.0).0)
         }
     }
 
     impl<T: Copy + Kind> Array3<T> {
         /// Create a new OCaml `Bigarray.Array3` with the given type and shape
-        pub fn create(dim: ndarray::Ix3) -> Array3<T> {
-            let x = crate::frame!((x) {
-                let data = unsafe { bigarray::malloc(dim.size() * mem::size_of::<T>()) };
-                x = unsafe {
-                    Value(bigarray::caml_ba_alloc_dims(
-                        T::kind() | bigarray::Managed::MANAGED as i32,
-                        3,
-                        data,
-                        dim[0] as sys::Intnat,
-                        dim[1] as sys::Intnat,
-                        dim[2] as sys::Intnat,
-                    ))
-                };
-                x
-            });
+        pub fn create(rt: &mut Runtime, dim: ndarray::Ix3) -> Array3<T> {
+            let x = unsafe {
+                let data = bigarray::malloc(dim.size() * mem::size_of::<T>());
+                Value(bigarray::caml_ba_alloc_dims(
+                    T::kind() | bigarray::Managed::MANAGED as i32,
+                    3,
+                    data,
+                    dim[0] as sys::Intnat,
+                    dim[1] as sys::Intnat,
+                    dim[2] as sys::Intnat,
+                ))
+                .register(rt)
+            };
             Array3(x, PhantomData)
         }
-    }
 
-    impl<T: Copy + Kind> From<ndarray::Array3<T>> for Array3<T> {
-        fn from(data: ndarray::Array3<T>) -> Array3<T> {
+        /// Create `Bigarray.Array3` from an existing `ndarray::Array3`
+        pub unsafe fn from_array(rt: &mut Runtime, data: ndarray::Array3<T>) -> Array3<T> {
             let dim = data.raw_dim();
-            let array = Array3::create(dim);
+            let array = Array3::create(rt, dim);
             let ba = array.0.custom_ptr_val::<bigarray::Bigarray>();
-            unsafe {
+            {
                 ptr::copy_nonoverlapping(data.as_ptr(), (*ba).data as *mut T, dim.size());
             }
             array
         }
     }
-}*/
+}

@@ -1,4 +1,4 @@
-use crate::Value;
+use crate::*;
 
 /// Errors that are translated directly into OCaml exceptions
 #[derive(Debug)]
@@ -75,13 +75,13 @@ impl From<CamlError> for Error {
 
 impl Error {
     /// Re-raise an existing exception value
-    pub fn reraise(exc: Value) -> Result<(), Error> {
+    pub unsafe fn reraise(exc: Value) -> Result<(), Error> {
         Err(CamlError::Exception(exc).into())
     }
 
     /// Raise an exception that has been registered using `Callback.register_exception` with no
     /// arguments
-    pub fn raise<S: AsRef<str>>(exc: S) -> Result<(), Error> {
+    pub unsafe fn raise<S: AsRef<str>>(exc: S) -> Result<(), Error> {
         let value = match Value::named(exc.as_ref()) {
             Some(v) => v,
             None => {
@@ -95,7 +95,11 @@ impl Error {
 
     /// Raise an exception that has been registered using `Callback.register_exception` with an
     /// argument
-    pub fn raise_with_arg<S: AsRef<str>, T: ToValue>(exc: S, arg: T) -> Result<(), Error> {
+    pub unsafe fn raise_with_arg<S: AsRef<str>, T: ToOCaml<T>>(
+        rt: &mut OCamlRuntime,
+        exc: S,
+        arg: T,
+    ) -> Result<(), Error> {
         let value = match Value::named(exc.as_ref()) {
             Some(v) => v,
             None => {
@@ -105,7 +109,8 @@ impl Error {
             }
         };
 
-        Err(CamlError::WithArg(value, arg.to_value()).into())
+        let arg = ocaml_alloc!(arg.to_ocaml(rt));
+        Err(CamlError::WithArg(value, Value(arg.raw())).into())
     }
 
     /// Raise `Not_found`
@@ -129,124 +134,116 @@ impl Error {
     }
 
     #[doc(hidden)]
-    pub fn raise_failure(s: &str) -> ! {
-        let s = s.to_value();
-        unsafe {
-            crate::sys::caml_failwith_value(s.0);
+    pub unsafe fn raise_failure(rt: &mut OCamlRuntime, s: &str) -> ! {
+        let s: OCaml<String> = ocaml_alloc!(s.to_ocaml(rt));
+        {
+            crate::sys::caml_failwith_value(s.raw());
         }
         #[allow(clippy::empty_loop)]
         loop {}
     }
 
     #[doc(hidden)]
-    pub fn raise_value(v: Value, s: &str) -> ! {
-        let s = s.to_value();
-        unsafe {
-            crate::sys::caml_raise_with_arg(v.0, s.0);
+    pub unsafe fn raise_value(rt: &mut OCamlRuntime, v: Value, s: &str) -> ! {
+        let s: OCaml<String> = ocaml_alloc!(s.to_ocaml(rt));
+        {
+            crate::sys::caml_raise_with_arg(v.0, s.raw());
         }
         #[allow(clippy::empty_loop)]
         loop {}
     }
 
     /// Get named error registered using `Callback.register_exception`
-    pub fn named<S: AsRef<str>>(s: S) -> Option<Value> {
+    pub unsafe fn named<S: AsRef<str>>(s: S) -> Option<Value> {
         Value::named(s.as_ref())
     }
-}
 
-#[cfg(not(feature = "no-std"))]
-unsafe impl<T: ToValue, E: 'static + std::error::Error> ToValue for Result<T, E> {
-    fn to_value(self) -> Value {
-        match self {
-            Ok(x) => x.to_value(),
-            Err(y) => {
-                let e: Result<T, Error> = Err(Error::Error(Box::new(y)));
-                e.to_value()
-            }
-        }
+    /// Wrap std::error::Error value
+    pub fn wrap<E: 'static + std::error::Error>(
+        rt: &mut OCamlRuntime,
+        error: E,
+    ) -> OCamlAllocResult<Error> {
+        let e = Error::Error(Box::new(error));
+        OCamlAllocResult::of_ocaml(ocaml_alloc!(e.to_ocaml(rt)))
     }
 }
 
-unsafe impl<T: ToValue> ToValue for Result<T, Error> {
-    fn to_value(self) -> Value {
+unsafe impl ToOCaml<Error> for Error {
+    fn to_ocaml(&self, token: OCamlAllocToken) -> OCamlAllocResult<Error> {
         match self {
-            Ok(x) => return x.to_value(),
-            Err(Error::Caml(CamlError::Exception(e))) => unsafe {
+            Error::Caml(CamlError::Exception(e)) => unsafe {
                 crate::sys::caml_raise(e.0);
             },
-            Err(Error::Caml(CamlError::NotFound)) => unsafe {
+            Error::Caml(CamlError::NotFound) => unsafe {
                 crate::sys::caml_raise_not_found();
             },
-            Err(Error::Caml(CamlError::ArrayBoundError)) => unsafe {
+            Error::Caml(CamlError::ArrayBoundError) => unsafe {
                 crate::sys::caml_array_bound_error();
             },
-            Err(Error::Caml(CamlError::OutOfMemory)) => unsafe {
+            Error::Caml(CamlError::OutOfMemory) => unsafe {
                 crate::sys::caml_array_bound_error();
             },
-            Err(Error::Caml(CamlError::EndOfFile)) => unsafe {
-                crate::sys::caml_raise_end_of_file()
-            },
-            Err(Error::Caml(CamlError::StackOverflow)) => unsafe {
+            Error::Caml(CamlError::EndOfFile) => unsafe { crate::sys::caml_raise_end_of_file() },
+            Error::Caml(CamlError::StackOverflow) => unsafe {
                 crate::sys::caml_raise_stack_overflow()
             },
-            Err(Error::Caml(CamlError::ZeroDivide)) => unsafe {
-                crate::sys::caml_raise_zero_divide()
-            },
-            Err(Error::Caml(CamlError::SysBlockedIo)) => unsafe {
+            Error::Caml(CamlError::ZeroDivide) => unsafe { crate::sys::caml_raise_zero_divide() },
+            Error::Caml(CamlError::SysBlockedIo) => unsafe {
                 crate::sys::caml_raise_sys_blocked_io()
             },
-            Err(Error::Caml(CamlError::InvalidArgument(s))) => {
+            Error::Caml(CamlError::InvalidArgument(s)) => {
                 unsafe {
-                    let s = crate::util::CString::new(s).expect("Invalid C string");
+                    let s = crate::util::CString::new(*s).expect("Invalid C string");
                     crate::sys::caml_invalid_argument(s.as_ptr() as *const ocaml_sys::Char)
                 };
             }
-            Err(Error::Caml(CamlError::WithArg(a, b))) => unsafe {
+            Error::Caml(CamlError::WithArg(a, b)) => unsafe {
                 crate::sys::caml_raise_with_arg(a.0, b.0)
             },
-            Err(Error::Caml(CamlError::SysError(s))) => {
+            Error::Caml(CamlError::SysError(s)) => {
                 unsafe {
-                    let s = s.to_value();
-                    crate::sys::caml_raise_sys_error(s.0)
+                    let rt = &mut token.recover_runtime_handle();
+                    let s: OCaml<String> = ocaml_alloc!(s.to_ocaml(rt));
+                    crate::sys::caml_raise_sys_error(s.raw())
                 };
             }
-            Err(Error::Message(s)) => {
+            Error::Message(s) => {
                 unsafe {
-                    let s = crate::util::CString::new(s).expect("Invalid C string");
+                    let s = crate::util::CString::new(*s).expect("Invalid C string");
                     crate::sys::caml_failwith(s.as_ptr() as *const ocaml_sys::Char)
                 };
             }
-            Err(Error::Caml(CamlError::Failure(s))) => {
+            Error::Caml(CamlError::Failure(s)) => {
                 unsafe {
-                    let s = crate::util::CString::new(s).expect("Invalid C string");
+                    let s = crate::util::CString::new(*s).expect("Invalid C string");
                     crate::sys::caml_failwith(s.as_ptr() as *const ocaml_sys::Char)
                 };
             }
             #[cfg(not(feature = "no-std"))]
-            Err(Error::Error(e)) => {
+            Error::Error(e) => {
                 let s = format!("{:?}\0", e);
                 unsafe { crate::sys::caml_failwith(s.as_ptr() as *const ocaml_sys::Char) };
             }
-            Err(Error::NotDoubleArray) => {
+            Error::NotDoubleArray => {
                 let s = "invalid double array\0";
                 unsafe { crate::sys::caml_failwith(s.as_ptr() as *const ocaml_sys::Char) };
             }
-            Err(Error::NotCallable) => {
+            Error::NotCallable => {
                 let s = "value is not callable\0";
                 unsafe { crate::sys::caml_failwith(s.as_ptr() as *const ocaml_sys::Char) };
             }
         };
 
-        Value::unit()
+        OCamlAllocResult::of(sys::UNIT)
     }
 }
 
-unsafe impl<T: FromValue> FromValue for Result<T, crate::Error> {
-    fn from_value(value: Value) -> Result<T, crate::Error> {
+/*impl<T: FromOCaml<T>> FromOCaml<Result<T, crate::Error>> for Result<T, crate::Error> {
+    fn from_ocaml(value: OCaml<Result<T, crate::Error>>) -> Self {
         if value.is_exception_result() {
             return Err(CamlError::Exception(value.exception().unwrap()).into());
         }
 
-        Ok(T::from_value(value))
+        Ok(T::from_ocaml(value))
     }
-}
+}*/

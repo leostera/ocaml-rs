@@ -78,13 +78,6 @@ pub trait Custom {
     }
 }
 
-unsafe impl<T: 'static + Custom> ToOCaml for T {
-    fn to_ocaml(self, rt: OCamlRuntime) -> Value {
-        let val: crate::Pointer<T> = Pointer::alloc_custom(self);
-        val.to_value(rt)
-    }
-}
-
 /// Create a custom OCaml type from an existing Rust type
 ///
 /// See [the struct
